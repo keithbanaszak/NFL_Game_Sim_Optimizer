@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NFL Player Projections — Visual Sheet (Dark)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Papa Parse for CSV -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    img[data-fallback] { background: #1e293b; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,.35); }
+    .chip { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100">
+  <!-- Header -->
+  <header class="sticky top-0 z-30 bg-slate-800/80 backdrop-blur border-b border-slate-700">
+    <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">NFL Player Projections</h1>
+        <p class="text-sm text-slate-400">Powered by your <span class="font-semibold">PlayerAvgs</span> model + team visuals.</p>
+      </div>
+      <div class="flex flex-wrap gap-2 items-center">
+        <select id="weekSelect" class="border border-slate-600 bg-slate-800 text-slate-100 rounded-lg px-3 py-2 text-sm">
+          <option value="">All Weeks</option>
+        </select>
+        <select id="posSelect" class="border border-slate-600 bg-slate-800 text-slate-100 rounded-lg px-3 py-2 text-sm">
+          <option value="">All Positions</option>
+          <option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option><option>DEF</option>
+        </select>
+        <select id="matchupSelect" class="border border-slate-600 bg-slate-800 text-slate-100 rounded-lg px-3 py-2 text-sm">
+          <option value="">All Matchups</option>
+        </select>
+        <input id="searchInput" class="border border-slate-600 bg-slate-800 text-slate-100 rounded-lg px-3 py-2 text-sm" placeholder="Search player/team…" />
+        <button id="resetBtn" class="px-3 py-2 text-sm rounded-lg bg-slate-100 text-slate-900">Reset</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Top performers -->
+  <section class="max-w-7xl mx-auto px-4 mt-6">
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="bg-slate-800 rounded-2xl shadow p-4 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-2">Top Performers (This View)</h2>
+        <div id="leaderWrap" class="grid sm:grid-cols-2 gap-3"></div>
+        <p class="text-xs text-slate-400 mt-3">Ranks use average of the stat across the current filtered set.</p>
+      </div>
+      <div class="bg-slate-800 rounded-2xl shadow p-4 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-2">Highlight Categories</h2>
+        <div class="flex flex-wrap gap-2">
+          <button data-lead="FD_points" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">FD Points</button>
+          <button data-lead="DK_points" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">DK Points</button>
+          <button data-lead="pass_yards" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">Pass Yards</button>
+          <button data-lead="rush_yards" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">Rush Yards</button>
+          <button data-lead="rec_yards" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">Rec Yards</button>
+          <button data-lead="receptions" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">Receptions</button>
+          <button data-lead="rush+rec_yards" class="chip px-3 py-2 border border-slate-600 bg-slate-700 rounded-lg text-sm">Rush+Rec Yds</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Grid -->
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    <div id="grid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+    <div id="emptyState" class="hidden mt-10 text-center text-slate-400">No players match your filters.</div>
+  </main>
+
+  <!-- Modal -->
+    <div id="playerModal" 
+        class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <div class="bg-slate-800 rounded-2xl p-6 max-w-2xl w-full shadow-lg border border-slate-600 overflow-y-auto max-h-[80vh] relative">
+        <button id="closeModal" class="absolute top-3 right-3 text-slate-400 hover:text-white">✕</button>
+        <h3 id="modalTitle" class="text-xl font-bold mb-4">Player Stats</h3>
+        <table class="w-full text-sm border-collapse">
+        <thead class="bg-slate-700">
+            <tr>
+            <th class="p-2 text-left">Week</th>
+            <th class="p-2 text-left">Opponent</th>
+            <th class="p-2">Pass Yds</th>
+            <th class="p-2">Rush Yds</th>
+            <th class="p-2">Rec Yds</th>
+            <th class="p-2">TDs</th>
+            <th class="p-2">Fantasy PPR</th>
+            </tr>
+        </thead>
+        <tbody id="modalBody" class="divide-y divide-slate-600"></tbody>
+        </table>
+    </div>
+    </div>
+
+  <script>
+    // ======= CONFIG: Published CSV URLs =======
+    const URL_PLAYER_AVGS  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSm-_9VRQ2jDTNb34x_kOfGJYwyqO93NIU63l44T_MpPwLRIGXFJpAhyKMvXIQ85sav4phdwlMFz3Bs/pub?output=csv&gid=799490385";
+    const URL_TEAMS        = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSm-_9VRQ2jDTNb34x_kOfGJYwyqO93NIU63l44T_MpPwLRIGXFJpAhyKMvXIQ85sav4phdwlMFz3Bs/pub?output=csv&gid=1621058641";
+    const URL_PLAYERS      = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSm-_9VRQ2jDTNb34x_kOfGJYwyqO93NIU63l44T_MpPwLRIGXFJpAhyKMvXIQ85sav4phdwlMFz3Bs/pub?output=csv&gid=1690710743";
+    const URL_WEEKLY_STATS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSm-_9VRQ2jDTNb34x_kOfGJYwyqO93NIU63l44T_MpPwLRIGXFJpAhyKMvXIQ85sav4phdwlMFz3Bs/pub?output=csv&gid=236166941";
+
+
+    const state = { avgs: [], teams: [], players: [], merged: [], filterWeek: "", filterPos: "", filterMatchup: "", search: "", leadersBy: "FD_points" };
+    const clean = (s) => (s ?? "").toString().trim().toLowerCase();
+    const byNum = (x) => Number.isFinite(Number(x)) ? Number(x) : 0;
+    const topN = (arr, key, n=4) => [...arr].sort((a,b)=>byNum(b[key])-byNum(a[key])).slice(0,n);
+    const blendBg = (c1="#111827",c2="#334155") => `linear-gradient(135deg, ${c1} 0%, ${c2} 100%)`;
+    const numberFmt = (n,d=1) => Number.isFinite(Number(n)) ? Number(n).toFixed(d) : "-";
+
+    async function loadCsv(url) {
+      return new Promise((resolve, reject) => {
+        Papa.parse(url, { download: true, header: true, skipEmptyLines: true,
+          complete: (res) => resolve(res.data), error: reject });
+      });
+    }
+
+    async function loadAll() {
+        const [avgs, teams, players, weekly] = await Promise.all([
+            loadCsv(URL_PLAYER_AVGS),
+            loadCsv(URL_TEAMS),
+            loadCsv(URL_PLAYERS),
+            loadCsv(URL_WEEKLY_STATS) // ✅ add this
+        ]);
+        state.avgs = avgs;
+        state.teams = teams;
+        state.players = players;
+        state.weekly = weekly; // ✅ save weekly logs
+        mergeAll(); initFilters(); render(); renderLeaders(); wireLeaderChips();
+        }
+
+    function mergeAll() {
+      const teamsByAbbr = new Map(state.teams.map(t => [clean(t.team_abbr), t]));
+      const playersByKey = new Map(state.players.map(p => [`${clean(p.player_name)}|${clean(p.team)}`, p]));
+      state.merged = state.avgs.map(r => {
+        const teamKey = clean(r.team), nameKey = `${clean(r.name)}|${teamKey}`;
+        const t = teamsByAbbr.get(teamKey) || {}, p = playersByKey.get(nameKey) || {};
+        return {...r, _team:t, _player:p,
+          _teamColor: t.team_color||"#0f172a", _teamColor2: t.team_color2||"#334155",
+          _logo: t.team_logo_espn||t.team_logo_wikipedia||t.team_logo_squared||"",
+          _headshot: p.headshot_url||"",
+          FD_points:byNum(r.FD_points), DK_points:byNum(r.DK_points),
+          pass_yards:byNum(r.pass_yards), rush_yards:byNum(r.rush_yards),
+          rec_yards:byNum(r.rec_yards), receptions:byNum(r.receptions),
+          "rush+rec_yards":byNum(r["rush+rec_yards"])};
+      });
+    }
+
+    function initFilters() {
+      const weekSel=document.getElementById("weekSelect"), posSel=document.getElementById("posSelect"),
+            searchInput=document.getElementById("searchInput"), resetBtn=document.getElementById("resetBtn");
+      const weeks=[...new Set(state.merged.map(r=>r.week))].filter(Boolean).sort((a,b)=>Number(a)-Number(b));
+      const matchupSel = document.getElementById("matchupSelect");
+
+        // unique matchup list
+        const matchups = [...new Set(state.merged.map(r => r.matchup))]
+        .filter(Boolean)
+        .sort();
+        matchups.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        matchupSel.appendChild(opt);
+        });
+
+        matchupSel.addEventListener("change", e => {
+        state.filterMatchup = e.target.value;
+        render();
+        renderLeaders();
+        });
+      weeks.forEach(w=>{const opt=document.createElement("option"); opt.value=w; opt.textContent=`Week ${w}`; weekSel.appendChild(opt);});
+      weekSel.addEventListener("change",e=>{state.filterWeek=e.target.value; render(); renderLeaders();});
+      posSel.addEventListener("change",e=>{state.filterPos=e.target.value; render(); renderLeaders();});
+      searchInput.addEventListener("input",e=>{state.search=e.target.value; render(); renderLeaders();});
+      resetBtn.addEventListener("click",()=>{weekSel.value=""; posSel.value=""; matchupSel.value = ""; searchInput.value=""; state.filterWeek=""; state.filterPos=""; state.search=""; state.filterMatchup = ""; render(); renderLeaders();});
+    }
+
+    function currentRows() {
+      return state.merged.filter(r=>{
+        if(state.filterWeek && String(r.week)!==String(state.filterWeek)) return false;
+        if(state.filterPos && String(r.pos).toUpperCase()!==String(state.filterPos).toUpperCase()) return false;
+        if (state.filterMatchup && r.matchup !== state.filterMatchup) return false;
+        if(state.search){const q=clean(state.search), hay=`${clean(r.name)} ${clean(r.team)} ${clean(r.matchup)}`; if(!hay.includes(q)) return false;}
+        return true;
+      });
+    }
+
+    function render() {
+      const rows=currentRows(), grid=document.getElementById("grid"), empty=document.getElementById("emptyState");
+      grid.innerHTML=""; if(!rows.length){empty.classList.remove("hidden"); return;} else empty.classList.add("hidden");
+      rows.sort((a,b)=>b.FD_points-a.FD_points);
+      for(const r of rows){const bg=blendBg(r._teamColor,r._teamColor2), logo=r._logo, head=r._headshot, teamName=r._team?.team_name||r.team;
+        const card=document.createElement("article"); card.className = "card rounded-2xl overflow-hidden shadow bg-slate-800 text-slate-100";
+        card.dataset.pid = r._player?.player_id || "";
+        card.innerHTML=`<div class="relative"><div class="h-20" style="background:${bg};"></div>
+          <img 
+            class="absolute top-0 left-0 w-24 h-24 object-contain opacity-20 -translate-x-4 -translate-y-2" 
+            src="${logo}" 
+            alt="${r.team} logo" 
+            onerror="this.style.opacity='0.05'" 
+            />
+          <img class="absolute -bottom-8 left-4 w-28 h-28 rounded-lg object-cover" src="${head}" alt="${r.name} headshot" onerror="this.style.display='none'"/></div>
+          <div class="pt-10 px-4 pb-4"><div class="flex items-center justify-between">
+            <div><h3 class="text-lg font-semibold">${r.name}</h3>
+              <p class="text-sm text-slate-500">${teamName} • ${r.pos} • <span class="font-medium">${r.matchup||""}</span></p></div>
+            <div class="text-right"><div class="text-xs text-slate-500">FD / DK</div>
+              <div class="font-semibold">${numberFmt(r.FD_points,1)} / ${numberFmt(r.DK_points,1)}</div></div></div>
+            <div class="mt-4 grid grid-cols-3 gap-2">
+              <div class="bg-slate-700 rounded-lg p-2"><div class="text-[11px] text-slate-500 uppercase">Pass Yds</div><div class="font-semibold">${numberFmt(r.pass_yards,0)}</div></div>
+              <div class="bg-slate-700 rounded-lg p-2"><div class="text-[11px] text-slate-500 uppercase">Rush Yds</div><div class="font-semibold">${numberFmt(r.rush_yards,0)}</div></div>
+              <div class="bg-slate-700 rounded-lg p-2"><div class="text-[11px] text-slate-500 uppercase">Rec Yds</div><div class="font-semibold">${numberFmt(r.rec_yards,0)}</div></div></div>
+            <div class="mt-3 grid grid-cols-3 gap-2">
+              <div class="bg-slate-700 rounded-lg p-2"><div class="text-[11px] text-slate-500 uppercase">Receptions</div><div class="font-semibold">${numberFmt(r.receptions,1)}</div></div>
+              <div class="bg-slate-700 rounded-lg p-2"><div class="text-[11px] text-slate-500 uppercase">Rush+Rec Yds</div><div class="font-semibold">${numberFmt(r["rush+rec_yards"],0)}</div></div>
+              <div class="bg-slate-700 rounded-lg p-2"><div class="text-[11px] text-slate-500 uppercase">Week</div><div class="font-semibold">${r.week}</div></div></div></div>`;
+        card.addEventListener("click",()=>showPlayerModal(r)); // ✅ just pass the row
+        grid.appendChild(card);
+    }
+    }
+
+    function renderLeaders() {
+        const wrap = document.getElementById("leaderWrap");
+        wrap.innerHTML = "";
+        const rows = currentRows();
+        if (!rows.length) return;
+
+        const cats = [
+            ["FD_points", "FD Pts"],
+            ["DK_points", "DK Pts"],
+            ["pass_yards", "Pass Yds"],
+            ["rush_yards", "Rush Yds"],
+            ["rec_yards", "Rec Yds"]
+        ];
+
+        for (const [key, label] of cats) {
+            const best = topN(rows, key, 1)[0];
+            if (!best) continue;
+
+            const bg = blendBg(best._teamColor, best._teamColor2);
+            const logo = best._logo;
+            const head = best._headshot;
+
+            const div = document.createElement("div");
+            div.className = "relative overflow-hidden rounded-2xl shadow flex items-center p-4 text-white";
+            div.style.background = bg;
+
+            div.innerHTML = `
+            <!-- Team logo watermark -->
+            <img class="absolute top-0 left-0 w-20 h-20 object-contain opacity-10 -translate-x-4 -translate-y-2" 
+                src="${logo}" alt="${best.team} logo" onerror="this.style.display='none'" />
+
+            <div class="flex-1 relative z-10">
+                <div class="text-xs uppercase opacity-80">${label}</div>
+                <div class="text-lg font-bold">${best.name}</div>
+                <div class="text-sm opacity-90">${best.team} • ${best.pos}</div>
+            </div>
+
+            <div class="flex items-center gap-2 relative z-10">
+                <div class="text-2xl font-extrabold">${numberFmt(best[key], key.includes("points") ? 1 : 0)}</div>
+                <img class="w-14 h-14 rounded-lg object-cover" 
+                    src="${head}" alt="${best.name}" onerror="this.style.display='none'" />
+            </div>
+            `;
+
+            wrap.appendChild(div);
+        }
+        }
+
+    function showPlayerModal(playerRow) {
+        const modal = document.getElementById("playerModal");
+        const title = document.getElementById("modalTitle");
+        const body = document.getElementById("modalBody");
+
+        title.textContent = `${playerRow.name} — ${playerRow.team}`;
+        body.innerHTML = "";
+
+        const games = (state.weekly || []).filter(
+            g => clean(g.full_name) === clean(playerRow.name)
+        );
+        games.sort((a, b) => Number(b.week) - Number(a.week));
+        const recent = games.slice(0, 5);
+
+        for (const g of recent) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+            <td class="px-2 py-1">${g.week}</td>
+            <td class="px-2 py-1">${g.opponent}</td>
+            <td class="px-2 py-1">${g.completions}/${g.attempts}</td>
+            <td class="px-2 py-1">${g.passing_yards}</td>
+            <td class="px-2 py-1">${g.rushing_yards}</td>
+            <td class="px-2 py-1">${g.receiving_yards}</td>
+            <td class="px-2 py-1">${Number(g.passing_tds||0) + Number(g.rushing_tds||0) + Number(g.receiving_tds||0)}</td>
+            <td class="px-2 py-1">${g.fantasy_points_ppr}</td>
+            `;
+            body.appendChild(tr);
+        }
+
+        modal.classList.remove("hidden");
+        document.getElementById("closeModal").onclick = () =>
+            modal.classList.add("hidden");
+    }
+
+    function wireLeaderChips() {
+      document.querySelectorAll("[data-lead]").forEach(btn=>{
+        btn.addEventListener("click",()=>{state.leadersBy=btn.dataset.lead; renderLeaders();});
+      });
+    }
+
+    loadAll().catch(err => {console.error(err); alert("Failed to load Google Sheet data. Check sharing permissions.");});
+  </script>
+</body>
+</html>
